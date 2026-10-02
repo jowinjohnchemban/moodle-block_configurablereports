@@ -35,7 +35,8 @@ class send_scheduled_reports extends \core\task\scheduled_task {
     }
 
     /**
-     * Find every report configured for automatic emailing and send those that are due.
+     * Find every report and every recurring combined-email bundle configured for automatic
+     * emailing, and send whichever ones are due.
      */
     public function execute(): void {
         global $CFG, $DB;
@@ -58,6 +59,27 @@ class send_scheduled_reports extends \core\task\scheduled_task {
             try {
                 $sent = cr_send_scheduled_report_email($report);
                 mtrace($sent ? '...OK' : '...skipped (no valid recipients)');
+            } catch (\Throwable $e) {
+                mtrace('...FAILED: ' . $e->getMessage());
+            }
+        }
+
+        $bundles = $DB->get_records_select('block_configurable_reports_bundles', 'emailschedule > 0');
+
+        foreach ($bundles as $bundle) {
+            if (trim((string) $bundle->emailto) === '' || trim((string) $bundle->reportids) === '') {
+                continue;
+            }
+
+            if (!cr_report_email_is_due($bundle)) {
+                continue;
+            }
+
+            mtrace("Sending scheduled report bundle '{$bundle->name}' (id {$bundle->id})...");
+
+            try {
+                $sent = cr_send_scheduled_bundle_email($bundle);
+                mtrace($sent ? '...OK' : '...skipped (no valid reports/recipients)');
             } catch (\Throwable $e) {
                 mtrace('...FAILED: ' . $e->getMessage());
             }

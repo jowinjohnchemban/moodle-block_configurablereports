@@ -300,6 +300,18 @@ function cr_get_email_schedule_options(): array {
 }
 
 /**
+ * Same as cr_get_email_schedule_options() but without the "do not send" option, for entities
+ * (like a report bundle) that only exist to be sent on a recurring basis.
+ *
+ * @return array
+ */
+function cr_get_recurring_schedule_options(): array {
+    $options = cr_get_email_schedule_options();
+    unset($options[0]);
+    return $options;
+}
+
+/**
  * JavaScript that progressively enhances a plain textarea (one email address per line, or
  * comma/semicolon separated) into an Outlook/Gmail-style "chip" input: typed addresses turn
  * into removable pills as you type, while the underlying textarea is kept in sync (one
@@ -811,6 +823,67 @@ function cr_send_email_with_attachments(
         debugging('Error sending configurable report email: ' . $e->getMessage(), DEBUG_NORMAL);
         return false;
     }
+}
+
+/**
+ * Get the recurring combined-email bundles ("send these N reports together, on a
+ * schedule") visible to a user in a course: all of them for managers, only their own
+ * otherwise. Mirrors cr_get_my_reports().
+ *
+ * @param int $courseid
+ * @param int $userid
+ * @param bool $allcourses When true and $courseid is SITEID, managers see bundles from every course.
+ * @return stdClass[] Keyed by id.
+ */
+function cr_get_my_bundles(int $courseid, int $userid, bool $allcourses = true): array {
+    global $DB;
+
+    $context = ($courseid === SITEID) ? context_system::instance() : context_course::instance($courseid);
+
+    if (has_capability('block/configurable_reports:managereports', $context, $userid)) {
+        if ($courseid === SITEID && $allcourses) {
+            return $DB->get_records('block_configurable_reports_bundles', null, 'name ASC');
+        }
+        return $DB->get_records('block_configurable_reports_bundles', ['courseid' => $courseid], 'name ASC');
+    }
+
+    return $DB->get_records_select(
+        'block_configurable_reports_bundles',
+        'ownerid = ? AND courseid = ? ORDER BY name ASC',
+        [$userid, $courseid]
+    );
+}
+
+/**
+ * Generate and send a recurring combined-email bundle to its recipients, then update its
+ * lastemailtime. Reports the bundle references that no longer exist are silently skipped.
+ *
+ * @param stdClass $bundle A record from block_configurable_reports_bundles.
+ * @return bool True if emailed to at least one recipient.
+ */
+function cr_send_scheduled_bundle_email(stdClass $bundle): bool {
+    global $DB;
+
+    $recipients = cr_parse_email_recipients((string) $bundle->emailto);
+    if (empty($recipients)) {
+        return false;
+    }
+
+    $reportids = array_filter(array_map('intval', explode(',', (string) $bundle->reportids)));
+    if (empty($reportids)) {
+        return false;
+    }
+
+    $messagehtml = format_text((string) $bundle->message, (int) $bundle->messageformat);
+    $subject = (string) $bundle->subject;
+
+    $sentcount = cr_send_reports_email($reportids, $recipients, $subject, $messagehtml, CR_REPORTS_EMAIL_COMBINED);
+
+    if ($sentcount > 0) {
+        $DB->set_field('block_configurable_reports_bundles', 'lastemailtime', time(), ['id' => $bundle->id]);
+    }
+
+    return $sentcount > 0;
 }
 
 /**
