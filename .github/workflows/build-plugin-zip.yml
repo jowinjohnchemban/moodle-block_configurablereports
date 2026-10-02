@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -44,6 +47,10 @@ jobs:
 
       - name: Attach zip to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: configurable_reports-${{ steps.version.outputs.release }}.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIPFILE: configurable_reports-${{ steps.version.outputs.release }}.zip
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" "$ZIPFILE" --clobber
