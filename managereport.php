@@ -112,11 +112,13 @@ if ($reports) {
         get_string('reportsmanage', 'admin') . ' ' . get_string('course'),
         get_string('type', 'block_configurable_reports'),
         get_string('username'),
+        get_string('emailschedule', 'block_configurable_reports'),
         get_string('edit'),
         get_string('download', 'block_configurable_reports'),
     ];
-    $table->align = ['left', 'left', 'left', 'left', 'center', 'center'];
-    $table->size = ['30%', '10%', '10%', '10%', '20%', '20%'];
+    $table->align = ['left', 'left', 'left', 'left', 'left', 'center', 'center'];
+    $table->size = ['25%', '10%', '10%', '10%', '15%', '15%', '15%'];
+    $emailscheduleoptions = cr_get_email_schedule_options();
     $stredit = get_string('edit');
     $strdelete = get_string('delete');
     $strhide = get_string('hide');
@@ -185,11 +187,23 @@ if ($reports) {
             }
         }
 
+        if (!empty($r->emailschedule)) {
+            $recipientcount = count(cr_parse_email_recipients((string) $r->emailto));
+            $emailstatus = '<a href="editreport.php?id=' . $r->id . '" title="' .
+                s($emailscheduleoptions[$r->emailschedule]) . '">' .
+                $OUTPUT->pix_icon('t/email', $emailscheduleoptions[$r->emailschedule]) . '&nbsp;' .
+                $emailscheduleoptions[$r->emailschedule] . ' (' . $recipientcount . ')</a>';
+        } else {
+            $emailstatus = '<a href="editreport.php?id=' . $r->id . '" class="text-muted">' .
+                $emailscheduleoptions[0] . '</a>';
+        }
+
         $table->data[] = [
             '<a href="viewreport.php?id=' . $r->id . '">' . format_string($r->name) . '</a>',
             $coursename,
             get_string('report_' . $r->type, 'block_configurable_reports'),
             $owner,
+            $emailstatus,
             $editcell,
             $download,
         ];
@@ -203,10 +217,24 @@ if ($reports) {
         'action' => 'sendreportsemail.php',
         'method' => 'post',
         'class' => 'mform mt-3',
+        'id' => 'cr_sendreportsemail_form',
     ]);
     echo html_writer::tag('legend', get_string('sendreportsbyemail', 'block_configurable_reports'));
+    echo html_writer::tag('p', get_string('sendreportsbyemailintro', 'block_configurable_reports'), ['class' => 'text-muted']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $course->id]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+
+    echo html_writer::start_tag('div', ['class' => 'mb-2']);
+    echo html_writer::link('#', get_string('selectall'), [
+        'onclick' => 'document.querySelectorAll("#cr_sendreportsemail_form input[type=checkbox]")' .
+            '.forEach(function(c){c.checked=true;}); return false;',
+    ]);
+    echo ' / ';
+    echo html_writer::link('#', get_string('deselectall'), [
+        'onclick' => 'document.querySelectorAll("#cr_sendreportsemail_form input[type=checkbox]")' .
+            '.forEach(function(c){c.checked=false;}); return false;',
+    ]);
+    echo html_writer::end_tag('div');
 
     foreach ($reports as $r) {
         echo html_writer::start_tag('div', ['class' => 'form-check']);

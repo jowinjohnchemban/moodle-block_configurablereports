@@ -108,6 +108,7 @@ $string['reportemailintro'] = 'Please find below the automatically generated rep
 
 // Ad-hoc "send reports by email" (multiple reports, custom content).
 $string['sendreportsbyemail'] = 'Send reports by email';
+$string['sendreportsbyemailintro'] = 'Send a one-off email with the selected reports to any list of recipients, with a custom subject and message. To have a report emailed automatically on a recurring basis instead, enable "Automatically email this report" in that report\'s own settings (the edit icon above).';
 $string['sendreportsbyemaildesc'] = 'You are about to send the following reports by email: {$a}';
 $string['noreportsselected'] = 'Please select at least one report to send by email';
 $string['reportsemailsent'] = 'Report(s) emailed to {$a} recipient(s)';
