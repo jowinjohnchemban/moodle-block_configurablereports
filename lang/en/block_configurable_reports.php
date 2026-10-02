@@ -106,6 +106,12 @@ $string['sendscheduledreports'] = 'Send scheduled configurable reports by email'
 $string['reportemailsubject'] = 'Report: {$a}';
 $string['reportemailintro'] = 'Please find below the automatically generated report "{$a}".';
 
+// Ad-hoc "send reports by email" (multiple reports, custom content).
+$string['sendreportsbyemail'] = 'Send reports by email';
+$string['sendreportsbyemaildesc'] = 'You are about to send the following reports by email: {$a}';
+$string['noreportsselected'] = 'Please select at least one report to send by email';
+$string['reportsemailsent'] = 'Report(s) emailed to {$a} recipient(s)';
+
 // Columns.
 $string['column'] = "Column";
 $string['nocolumnsyet'] = "No columns yet";

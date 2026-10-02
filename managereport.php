@@ -198,6 +198,34 @@ if ($reports) {
     $table->id = 'reportslist';
     cr_add_jsordering("#reportslist", $PAGE);
     cr_print_table($table);
+
+    echo html_writer::start_tag('form', [
+        'action' => 'sendreportsemail.php',
+        'method' => 'post',
+        'class' => 'mform mt-3',
+    ]);
+    echo html_writer::tag('legend', get_string('sendreportsbyemail', 'block_configurable_reports'));
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $course->id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+
+    foreach ($reports as $r) {
+        echo html_writer::start_tag('div', ['class' => 'form-check']);
+        echo html_writer::checkbox(
+            'ids[]',
+            $r->id,
+            false,
+            format_string($r->name),
+            ['id' => 'cr_sendreport_' . $r->id, 'class' => 'form-check-input']
+        );
+        echo html_writer::end_tag('div');
+    }
+
+    echo html_writer::empty_tag('input', [
+        'type' => 'submit',
+        'value' => get_string('sendreportsbyemail', 'block_configurable_reports'),
+        'class' => 'btn btn-secondary mt-2',
+    ]);
+    echo html_writer::end_tag('form');
 } else {
     echo $OUTPUT->heading(get_string('noreportsavailable', 'block_configurable_reports'));
 }

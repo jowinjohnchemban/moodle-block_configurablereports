@@ -375,22 +375,19 @@ function cr_report_email_is_due(stdClass $report): bool {
 }
 
 /**
- * Generate a report and email it to its predefined recipients, as CSV attachment
- * plus an HTML preview of the data in the message body.
+ * Run a report and prepare everything needed to email it: an HTML preview of its data
+ * and (when it has any rows) a CSV file on disk ready to attach.
+ *
+ * The caller is responsible for deleting the returned csvpath (if any) once done.
  *
  * @param stdClass $report A record from block_configurable_reports.
- * @return bool True if the report was generated and emailed to at least one recipient.
+ * @return stdClass Object with ->name, ->html, ->csvpath (full path or '') and ->csvfilename.
  */
-function cr_send_scheduled_report_email(stdClass $report): bool {
+function cr_generate_report_for_email(stdClass $report): stdClass {
     global $CFG, $DB, $COURSE;
 
-    $recipients = cr_parse_email_recipients((string) $report->emailto);
-    if (empty($recipients)) {
-        return false;
-    }
-
     if (!$course = $DB->get_record('course', ['id' => $report->courseid])) {
-        return false;
+        throw new moodle_exception('nosuchcourseid', 'block_configurable_reports');
     }
     $COURSE = $course;
 
@@ -401,41 +398,66 @@ function cr_send_scheduled_report_email(stdClass $report): bool {
     $reportclass = new $reportclassname($report);
     $reportclass->create_report();
 
-    $reportname = format_string($report->name);
+    $result = new stdClass();
+    $result->name = format_string($report->name);
     $table = $reportclass->finalreport->table ?? null;
 
-    $htmlbody = html_writer::tag('p', get_string('reportemailintro', 'block_configurable_reports', $reportname));
     if (!empty($table) && !empty($table->data)) {
-        $htmlbody .= cr_table_to_html($table);
+        $result->html = cr_table_to_html($table);
+
+        $csvcontent = cr_table_to_csv($table);
+        $tmpdir = make_temp_directory('block_configurable_reports');
+        $result->csvfilename = clean_filename($result->name) . '.csv';
+        $result->csvpath = $tmpdir . '/' . md5($report->id . '_' . microtime()) . '_' . $result->csvfilename;
+        file_put_contents($result->csvpath, $csvcontent);
     } else {
-        $htmlbody .= html_writer::tag('p', get_string('norecordsfound', 'block_configurable_reports'));
+        $result->html = html_writer::tag('p', get_string('norecordsfound', 'block_configurable_reports'));
+        $result->csvpath = '';
+        $result->csvfilename = '';
     }
+
+    return $result;
+}
+
+/**
+ * Generate a report and email it to its predefined recipients, as CSV attachment
+ * plus an HTML preview of the data in the message body.
+ *
+ * @param stdClass $report A record from block_configurable_reports.
+ * @return bool True if the report was generated and emailed to at least one recipient.
+ */
+function cr_send_scheduled_report_email(stdClass $report): bool {
+    global $CFG, $DB;
+
+    $recipients = cr_parse_email_recipients((string) $report->emailto);
+    if (empty($recipients)) {
+        return false;
+    }
+
+    $generated = cr_generate_report_for_email($report);
+
+    $htmlbody = html_writer::tag('p', get_string('reportemailintro', 'block_configurable_reports', $generated->name));
+    $htmlbody .= $generated->html;
     $textbody = html_to_text($htmlbody);
 
     $attachment = '';
-    $attachname = '';
-    if (!empty($table) && !empty($table->data)) {
-        $csvcontent = cr_table_to_csv($table);
-        $tmpdir = make_temp_directory('block_configurable_reports');
-        $attachname = clean_filename($reportname) . '.csv';
-        $fullpath = $tmpdir . '/' . md5($report->id . '_' . time()) . '_' . $attachname;
-        file_put_contents($fullpath, $csvcontent);
-        $attachment = str_replace($CFG->dataroot . '/', '', $fullpath);
+    if (!empty($generated->csvpath)) {
+        $attachment = str_replace($CFG->dataroot . '/', '', $generated->csvpath);
     }
 
-    $subject = get_string('reportemailsubject', 'block_configurable_reports', $reportname);
+    $subject = get_string('reportemailsubject', 'block_configurable_reports', $generated->name);
     $fromuser = core_user::get_noreply_user();
 
     $sentany = false;
     foreach ($recipients as $email) {
         $touser = cr_make_email_recipient($email);
-        if (email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $attachment, $attachname)) {
+        if (email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $attachment, $generated->csvfilename)) {
             $sentany = true;
         }
     }
 
-    if (!empty($attachment) && !empty($fullpath) && file_exists($fullpath)) {
-        unlink($fullpath);
+    if (!empty($generated->csvpath) && file_exists($generated->csvpath)) {
+        unlink($generated->csvpath);
     }
 
     if ($sentany) {
@@ -443,6 +465,98 @@ function cr_send_scheduled_report_email(stdClass $report): bool {
     }
 
     return $sentany;
+}
+
+/**
+ * Generate one or more reports and email them, as attachments, to a list of recipients
+ * with a custom subject and message. Used for ad-hoc (non-scheduled) sending of a batch
+ * of reports, e.g. from the manage reports page.
+ *
+ * When more than one report is selected, all CSV attachments are bundled into a single
+ * zip file (email_to_user() only supports a single attachment).
+ *
+ * @param int[] $reportids Ids of records in block_configurable_reports.
+ * @param string[] $recipients Valid recipient email addresses.
+ * @param string $subject Custom email subject.
+ * @param string $messagehtml Custom email message (HTML), shown before the report previews.
+ * @return int Number of recipients the email was successfully sent to.
+ */
+function cr_send_reports_email(array $reportids, array $recipients, string $subject, string $messagehtml): int {
+    global $CFG, $DB;
+
+    if (empty($reportids) || empty($recipients)) {
+        return 0;
+    }
+
+    $reports = $DB->get_records_list('block_configurable_reports', 'id', $reportids);
+    if (empty($reports)) {
+        return 0;
+    }
+
+    $htmlbody = $messagehtml;
+    $csvfiles = [];
+    $singleattachment = '';
+    $singleattachname = '';
+
+    foreach ($reports as $report) {
+        $generated = cr_generate_report_for_email($report);
+
+        $htmlbody .= html_writer::tag('h4', $generated->name);
+        $htmlbody .= $generated->html;
+
+        if (!empty($generated->csvpath)) {
+            // Prefix with the report id so that same-named reports don't collide inside the zip.
+            $zipentryname = $report->id . '_' . $generated->csvfilename;
+            $csvfiles[$zipentryname] = [
+                'name' => $generated->csvfilename,
+                'path' => $generated->csvpath,
+            ];
+        }
+    }
+
+    $tmpdir = make_temp_directory('block_configurable_reports');
+
+    if (count($csvfiles) === 1) {
+        $only = reset($csvfiles);
+        $singleattachname = $only['name'];
+        $singleattachment = str_replace($CFG->dataroot . '/', '', $only['path']);
+    } else if (count($csvfiles) > 1) {
+        $zipfilename = 'reports_' . date('Ymd_His') . '.zip';
+        $zipfullpath = $tmpdir . '/' . md5(implode(',', $reportids) . microtime()) . '_' . $zipfilename;
+
+        $filestoarchive = [];
+        foreach ($csvfiles as $zipentryname => $file) {
+            $filestoarchive[$zipentryname] = $file['path'];
+        }
+
+        $zipper = new zip_packer();
+        if ($zipper->archive_to_pathname($filestoarchive, $zipfullpath)) {
+            $singleattachname = $zipfilename;
+            $singleattachment = str_replace($CFG->dataroot . '/', '', $zipfullpath);
+        }
+    }
+
+    $textbody = html_to_text($htmlbody);
+    $fromuser = core_user::get_noreply_user();
+
+    $sentcount = 0;
+    foreach ($recipients as $email) {
+        $touser = cr_make_email_recipient($email);
+        if (email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $singleattachment, $singleattachname)) {
+            $sentcount++;
+        }
+    }
+
+    foreach ($csvfiles as $file) {
+        if (file_exists($file['path'])) {
+            unlink($file['path']);
+        }
+    }
+    if (!empty($zipfullpath) && file_exists($zipfullpath)) {
+        unlink($zipfullpath);
+    }
+
+    return $sentcount;
 }
 
 /**
