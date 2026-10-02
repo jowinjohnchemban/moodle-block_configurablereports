@@ -65,18 +65,29 @@ if (empty($ids)) {
         \core\output\notification::NOTIFY_ERROR);
 }
 
+$selectedreports = array_intersect_key($myreports, array_flip($ids));
+
 require_once('sendreportsemail_form.php');
 
-$mform = new sendreportsemail_form(null, ['courseid' => $courseid, 'ids' => $ids]);
+$mform = new sendreportsemail_form(null, ['courseid' => $courseid, 'reports' => $selectedreports]);
 
 if ($mform->is_cancelled()) {
     redirect($managereporturl);
 } else if ($data = $mform->get_data()) {
     $reportids = array_map('intval', explode(',', $data->reportids));
     $recipients = cr_parse_email_recipients($data->emailto);
-    $messagehtml = format_text($data->content['text'], $data->content['format']);
 
-    $sentcount = cr_send_reports_email($reportids, $recipients, $data->subject, $messagehtml, $data->sendmode);
+    if ($data->sendmode === CR_REPORTS_EMAIL_SEPARATE) {
+        $messages = [];
+        foreach ($reportids as $reportid) {
+            $field = 'message_' . $reportid;
+            $messages[$reportid] = !empty($data->$field) ? format_text($data->$field, FORMAT_PLAIN) : '';
+        }
+    } else {
+        $messages = format_text($data->content['text'], $data->content['format']);
+    }
+
+    $sentcount = cr_send_reports_email($reportids, $recipients, $data->subject, $messages, $data->sendmode);
 
     redirect($managereporturl, get_string('reportsemailsent', 'block_configurable_reports', $sentcount), null,
         \core\output\notification::NOTIFY_SUCCESS);
@@ -92,7 +103,6 @@ $PAGE->set_heading($title);
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title);
 
-$selectedreports = array_intersect_key($myreports, array_flip($ids));
 $names = array_map(function ($r) {
     return format_string($r->name);
 }, $selectedreports);

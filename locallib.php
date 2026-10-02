@@ -300,6 +300,131 @@ function cr_get_email_schedule_options(): array {
 }
 
 /**
+ * JavaScript that progressively enhances a plain textarea (one email address per line, or
+ * comma/semicolon separated) into an Outlook/Gmail-style "chip" input: typed addresses turn
+ * into removable pills as you type, while the underlying textarea is kept in sync (one
+ * address per line) so existing server-side parsing/validation keeps working unchanged.
+ *
+ * Pure vanilla JS with no AMD/build step dependency, since it just needs to progressively
+ * enhance a plain form field.
+ *
+ * @param string $textareaid The id of the textarea element to enhance.
+ * @return string JavaScript source, ready for $PAGE->requires->js_init_code().
+ */
+function cr_email_chip_input_js(string $textareaid): string {
+    $id = json_encode($textareaid);
+
+    return <<<JS
+(function() {
+    var ta = document.getElementById({$id});
+    if (!ta || ta.dataset.crChipified) {
+        return;
+    }
+    ta.dataset.crChipified = '1';
+    ta.style.display = 'none';
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'cr-email-chip-input form-control';
+    wrapper.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;align-items:center;' +
+        'min-height:2.4em;height:auto;padding:4px;cursor:text;';
+    ta.parentNode.insertBefore(wrapper, ta);
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.setAttribute('aria-label', ta.getAttribute('aria-label') || '');
+    input.style.cssText = 'border:none;outline:none;flex:1 1 auto;min-width:150px;' +
+        'background:transparent;';
+
+    function syncTextarea() {
+        var chips = wrapper.querySelectorAll('.cr-email-chip');
+        var emails = [];
+        chips.forEach(function(c) {
+            emails.push(c.getAttribute('data-email'));
+        });
+        ta.value = emails.join('\\n');
+        ta.dispatchEvent(new Event('change'));
+    }
+
+    function addChip(raw) {
+        var email = raw.trim().replace(/[,;]+$/, '').trim();
+        if (!email) {
+            return;
+        }
+        var chip = document.createElement('span');
+        chip.className = 'cr-email-chip badge badge-light border';
+        chip.setAttribute('data-email', email);
+        chip.style.cssText = 'display:inline-flex;align-items:center;background:#e9ecef;' +
+            'border-radius:12px;padding:2px 4px 2px 10px;font-weight:normal;';
+        chip.appendChild(document.createTextNode(email));
+
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', 'Remove');
+        remove.textContent = '\\u00d7';
+        remove.style.cssText = 'margin-left:6px;border:none;background:none;cursor:pointer;' +
+            'line-height:1;font-size:1rem;padding:0 4px;';
+        remove.addEventListener('click', function() {
+            wrapper.removeChild(chip);
+            syncTextarea();
+            input.focus();
+        });
+        chip.appendChild(remove);
+        wrapper.insertBefore(chip, input);
+        syncTextarea();
+    }
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ',' || e.key === ';' || e.key === 'Tab') {
+            if (input.value.trim()) {
+                e.preventDefault();
+                addChip(input.value);
+                input.value = '';
+            }
+        } else if (e.key === 'Backspace' && input.value === '') {
+            var chips = wrapper.querySelectorAll('.cr-email-chip');
+            if (chips.length) {
+                wrapper.removeChild(chips[chips.length - 1]);
+                syncTextarea();
+            }
+        }
+    });
+
+    input.addEventListener('blur', function() {
+        if (input.value.trim()) {
+            addChip(input.value);
+            input.value = '';
+        }
+    });
+
+    input.addEventListener('paste', function(e) {
+        var text = (e.clipboardData || window.clipboardData).getData('text');
+        if (text && /[,;\\n]/.test(text)) {
+            e.preventDefault();
+            text.split(/[\\r\\n,;]+/).forEach(function(part) {
+                addChip(part);
+            });
+        }
+    });
+
+    wrapper.addEventListener('click', function(e) {
+        if (e.target === wrapper) {
+            input.focus();
+        }
+    });
+
+    wrapper.appendChild(input);
+
+    (ta.value || '').split(/[\\r\\n,;]+/).forEach(function(part) {
+        part = part.trim();
+        if (part) {
+            addChip(part);
+        }
+    });
+})();
+JS;
+}
+
+/**
  * Split a free-text list of recipient addresses (newline/comma/semicolon separated) into
  * a clean array of unique, valid email addresses.
  *
@@ -499,7 +624,9 @@ function cr_get_reports_email_modes(): array {
  * @param int[] $reportids Ids of records in block_configurable_reports.
  * @param string[] $recipients Valid recipient email addresses.
  * @param string $subject Custom email subject.
- * @param string $messagehtml Custom email message (HTML), shown before the report previews.
+ * @param string|array $messages Custom email message(s) (HTML), shown before the report
+ *        previews. For CR_REPORTS_EMAIL_COMBINED, a single string shared by all reports.
+ *        For CR_REPORTS_EMAIL_SEPARATE, an array keyed by report id, one message per report.
  * @param string $sendmode One of the CR_REPORTS_EMAIL_* constants.
  * @return int Number of individual emails successfully sent.
  */
@@ -507,7 +634,7 @@ function cr_send_reports_email(
     array $reportids,
     array $recipients,
     string $subject,
-    string $messagehtml,
+    $messages,
     string $sendmode = CR_REPORTS_EMAIL_COMBINED
 ): int {
     global $DB;
@@ -522,28 +649,31 @@ function cr_send_reports_email(
     }
 
     if ($sendmode === CR_REPORTS_EMAIL_SEPARATE) {
-        return cr_send_reports_email_separately($reports, $recipients, $subject, $messagehtml);
+        return cr_send_reports_email_separately($reports, $recipients, $subject, (array) $messages);
     }
 
-    return cr_send_reports_email_combined($reports, $recipients, $subject, $messagehtml);
+    return cr_send_reports_email_combined($reports, $recipients, $subject, (string) $messages);
 }
 
 /**
- * Send every report as its own, independent email to every recipient.
+ * Send every report as its own, independent email to every recipient, each with its own
+ * custom message.
  *
  * @param array $reports Records from block_configurable_reports.
  * @param string[] $recipients Valid recipient email addresses.
  * @param string $subject Custom email subject (used for every report).
- * @param string $messagehtml Custom email message (HTML), shown before the report preview.
+ * @param array $messages Custom email message (HTML) per report id; missing/empty entries
+ *        are sent with no extra message, just the report preview.
  * @return int Number of individual emails successfully sent.
  */
-function cr_send_reports_email_separately(array $reports, array $recipients, string $subject, string $messagehtml): int {
+function cr_send_reports_email_separately(array $reports, array $recipients, string $subject, array $messages): int {
     $fromuser = core_user::get_noreply_user();
     $sentcount = 0;
 
     foreach ($reports as $report) {
         $generated = cr_generate_report_for_email($report);
 
+        $messagehtml = $messages[$report->id] ?? '';
         $htmlbody = $messagehtml . $generated->html;
         $textbody = html_to_text($htmlbody);
         $reportsubject = $subject . ' - ' . $generated->name;

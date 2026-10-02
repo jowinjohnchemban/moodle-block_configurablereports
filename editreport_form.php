@@ -135,6 +135,9 @@ class report_edit_form extends moodleform {
         $mform->addHelpButton('emailto', 'emailto', 'block_configurable_reports');
         $mform->disabledIf('emailto', 'emailschedule', 'eq', 0);
 
+        global $PAGE;
+        $PAGE->requires->js_init_code(cr_email_chip_input_js('id_emailto'), true);
+
         // Adds an embed link for easy copy/paste once the report is saved.
         if (isset($this->_customdata['report']->id) && $this->_customdata['report']->id) {
 

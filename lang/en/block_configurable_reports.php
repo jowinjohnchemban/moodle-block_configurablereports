@@ -504,6 +504,7 @@ DataTables JS library (Column sort, fixed header, search, paging...)';
 
 $string['email_subject'] = 'Subject';
 $string['email_message'] = 'Message';
+$string['email_message_for'] = 'Message for "{$a}"';
 $string['email_send'] = 'Send';
 
 $string['sqlsecurity'] = 'SQL Security';

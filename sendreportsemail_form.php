@@ -38,12 +38,17 @@ class sendreportsemail_form extends moodleform {
      * Form definition
      */
     public function definition(): void {
+        global $PAGE;
+
         $mform =& $this->_form;
+        /** @var stdClass[] $reports Selected report records, keyed by id. */
+        $reports = $this->_customdata['reports'];
+        $reportids = array_keys($reports);
 
         $mform->addElement('hidden', 'courseid', $this->_customdata['courseid']);
         $mform->setType('courseid', PARAM_INT);
 
-        $mform->addElement('hidden', 'reportids', implode(',', $this->_customdata['ids']));
+        $mform->addElement('hidden', 'reportids', implode(',', $reportids));
         $mform->setType('reportids', PARAM_SEQUENCE);
 
         $mform->addElement(
@@ -59,7 +64,7 @@ class sendreportsemail_form extends moodleform {
             'textarea',
             'emailto',
             get_string('emailto', 'block_configurable_reports'),
-            ['rows' => 4, 'cols' => 50]
+            ['rows' => 3, 'cols' => 50, 'id' => 'id_emailto']
         );
         $mform->setType('emailto', PARAM_RAW_TRIMMED);
         $mform->addHelpButton('emailto', 'emailto', 'block_configurable_reports');
@@ -69,6 +74,7 @@ class sendreportsemail_form extends moodleform {
         $mform->setType('subject', PARAM_TEXT);
         $mform->addRule('subject', null, 'required', null, 'client');
 
+        // Combined mode: one shared message for all selected reports.
         $editoroptions = [
             'trusttext' => true,
             'subdirs' => 0,
@@ -76,8 +82,24 @@ class sendreportsemail_form extends moodleform {
         ];
         $mform->addElement('editor', 'content', get_string('email_message', 'block_configurable_reports'), null, $editoroptions);
         $mform->setType('content', PARAM_RAW);
+        $mform->hideIf('content', 'sendmode', 'eq', CR_REPORTS_EMAIL_SEPARATE);
+
+        // Separate mode: one independent message per selected report.
+        foreach ($reports as $report) {
+            $fieldname = 'message_' . $report->id;
+            $mform->addElement(
+                'textarea',
+                $fieldname,
+                get_string('email_message_for', 'block_configurable_reports', format_string($report->name)),
+                ['rows' => 3, 'cols' => 50]
+            );
+            $mform->setType($fieldname, PARAM_RAW_TRIMMED);
+            $mform->hideIf($fieldname, 'sendmode', 'eq', CR_REPORTS_EMAIL_COMBINED);
+        }
 
         $this->add_action_buttons(true, get_string('email_send', 'block_configurable_reports'));
+
+        $PAGE->requires->js_init_code(cr_email_chip_input_js('id_emailto'), true);
     }
 
     /**
