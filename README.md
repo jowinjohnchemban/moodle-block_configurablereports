@@ -21,3 +21,16 @@ reports management page.
 See [`README.txt`](README.txt) and [`readme_moodle.txt`](readme_moodle.txt)
 for installation instructions, upstream history and the full list of
 contributors.
+
+## Building an installable zip
+
+A ready-to-install zip (`configurable_reports-<version>.zip`, with the
+plugin at its root as Moodle expects under `blocks/configurable_reports`)
+is built automatically by the **Build plugin zip** GitHub Actions
+workflow:
+
+- on every push of a `v*` tag, where it's also attached to the matching
+  GitHub release;
+- on demand, via the *Run workflow* button on the
+  [Build plugin zip](../../actions/workflows/build-plugin-zip.yml)
+  workflow page — the zip is available as a workflow run artifact.
