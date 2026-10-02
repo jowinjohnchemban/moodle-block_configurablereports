@@ -111,6 +111,10 @@ $string['sendreportsbyemail'] = 'Send reports by email';
 $string['sendreportsbyemaildesc'] = 'You are about to send the following reports by email: {$a}';
 $string['noreportsselected'] = 'Please select at least one report to send by email';
 $string['reportsemailsent'] = 'Report(s) emailed to {$a} recipient(s)';
+$string['sendmode'] = 'How to send';
+$string['sendmode_help'] = 'Choose whether to send all selected reports together in one email (each attached separately, not zipped), or as a separate, independent email per report.';
+$string['sendmode_combined'] = 'Combined: one email with all reports attached separately';
+$string['sendmode_separate'] = 'Separate: one independent email per report';
 
 // Columns.
 $string['column'] = "Column";

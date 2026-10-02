@@ -76,7 +76,7 @@ if ($mform->is_cancelled()) {
     $recipients = cr_parse_email_recipients($data->emailto);
     $messagehtml = format_text($data->content['text'], $data->content['format']);
 
-    $sentcount = cr_send_reports_email($reportids, $recipients, $data->subject, $messagehtml);
+    $sentcount = cr_send_reports_email($reportids, $recipients, $data->subject, $messagehtml, $data->sendmode);
 
     redirect($managereporturl, get_string('reportsemailsent', 'block_configurable_reports', $sentcount), null,
         \core\output\notification::NOTIFY_SUCCESS);

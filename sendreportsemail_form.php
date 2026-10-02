@@ -47,6 +47,15 @@ class sendreportsemail_form extends moodleform {
         $mform->setType('reportids', PARAM_SEQUENCE);
 
         $mform->addElement(
+            'select',
+            'sendmode',
+            get_string('sendmode', 'block_configurable_reports'),
+            cr_get_reports_email_modes()
+        );
+        $mform->addHelpButton('sendmode', 'sendmode', 'block_configurable_reports');
+        $mform->setDefault('sendmode', CR_REPORTS_EMAIL_COMBINED);
+
+        $mform->addElement(
             'textarea',
             'emailto',
             get_string('emailto', 'block_configurable_reports'),

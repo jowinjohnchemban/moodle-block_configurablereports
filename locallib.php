@@ -467,22 +467,50 @@ function cr_send_scheduled_report_email(stdClass $report): bool {
     return $sentany;
 }
 
+// Email send mode: one email per recipient, with every selected report attached
+// individually (no zipping).
+define('CR_REPORTS_EMAIL_COMBINED', 'combined');
+
+// Email send mode: one independent email per recipient per report.
+define('CR_REPORTS_EMAIL_SEPARATE', 'separate');
+
 /**
- * Generate one or more reports and email them, as attachments, to a list of recipients
- * with a custom subject and message. Used for ad-hoc (non-scheduled) sending of a batch
- * of reports, e.g. from the manage reports page.
+ * Available "how to send" options for the ad-hoc multi-report email form.
  *
- * When more than one report is selected, all CSV attachments are bundled into a single
- * zip file (email_to_user() only supports a single attachment).
+ * @return array
+ */
+function cr_get_reports_email_modes(): array {
+    return [
+        CR_REPORTS_EMAIL_COMBINED => get_string('sendmode_combined', 'block_configurable_reports'),
+        CR_REPORTS_EMAIL_SEPARATE => get_string('sendmode_separate', 'block_configurable_reports'),
+    ];
+}
+
+/**
+ * Generate one or more reports and email them to a list of recipients, with a custom
+ * subject and message. Used for ad-hoc (non-scheduled) sending of a batch of reports,
+ * e.g. from the manage reports page.
+ *
+ * Two mutually exclusive send modes are supported:
+ * - CR_REPORTS_EMAIL_COMBINED: a single email per recipient, with every report's CSV
+ *   attached individually (not zipped together).
+ * - CR_REPORTS_EMAIL_SEPARATE: one independent email per recipient, per report.
  *
  * @param int[] $reportids Ids of records in block_configurable_reports.
  * @param string[] $recipients Valid recipient email addresses.
  * @param string $subject Custom email subject.
  * @param string $messagehtml Custom email message (HTML), shown before the report previews.
- * @return int Number of recipients the email was successfully sent to.
+ * @param string $sendmode One of the CR_REPORTS_EMAIL_* constants.
+ * @return int Number of individual emails successfully sent.
  */
-function cr_send_reports_email(array $reportids, array $recipients, string $subject, string $messagehtml): int {
-    global $CFG, $DB;
+function cr_send_reports_email(
+    array $reportids,
+    array $recipients,
+    string $subject,
+    string $messagehtml,
+    string $sendmode = CR_REPORTS_EMAIL_COMBINED
+): int {
+    global $DB;
 
     if (empty($reportids) || empty($recipients)) {
         return 0;
@@ -493,10 +521,66 @@ function cr_send_reports_email(array $reportids, array $recipients, string $subj
         return 0;
     }
 
+    if ($sendmode === CR_REPORTS_EMAIL_SEPARATE) {
+        return cr_send_reports_email_separately($reports, $recipients, $subject, $messagehtml);
+    }
+
+    return cr_send_reports_email_combined($reports, $recipients, $subject, $messagehtml);
+}
+
+/**
+ * Send every report as its own, independent email to every recipient.
+ *
+ * @param array $reports Records from block_configurable_reports.
+ * @param string[] $recipients Valid recipient email addresses.
+ * @param string $subject Custom email subject (used for every report).
+ * @param string $messagehtml Custom email message (HTML), shown before the report preview.
+ * @return int Number of individual emails successfully sent.
+ */
+function cr_send_reports_email_separately(array $reports, array $recipients, string $subject, string $messagehtml): int {
+    $fromuser = core_user::get_noreply_user();
+    $sentcount = 0;
+
+    foreach ($reports as $report) {
+        $generated = cr_generate_report_for_email($report);
+
+        $htmlbody = $messagehtml . $generated->html;
+        $textbody = html_to_text($htmlbody);
+        $reportsubject = $subject . ' - ' . $generated->name;
+
+        $attachments = [];
+        if (!empty($generated->csvpath)) {
+            $attachments[] = ['path' => $generated->csvpath, 'name' => $generated->csvfilename];
+        }
+
+        foreach ($recipients as $email) {
+            $touser = cr_make_email_recipient($email);
+            if (cr_send_email_with_attachments($touser, $fromuser, $reportsubject, $textbody, $htmlbody, $attachments)) {
+                $sentcount++;
+            }
+        }
+
+        if (!empty($generated->csvpath) && file_exists($generated->csvpath)) {
+            unlink($generated->csvpath);
+        }
+    }
+
+    return $sentcount;
+}
+
+/**
+ * Send all reports together in a single email per recipient, each report's CSV attached
+ * individually (no zipping).
+ *
+ * @param array $reports Records from block_configurable_reports.
+ * @param string[] $recipients Valid recipient email addresses.
+ * @param string $subject Custom email subject.
+ * @param string $messagehtml Custom email message (HTML), shown before the report previews.
+ * @return int Number of individual emails successfully sent.
+ */
+function cr_send_reports_email_combined(array $reports, array $recipients, string $subject, string $messagehtml): int {
     $htmlbody = $messagehtml;
-    $csvfiles = [];
-    $singleattachment = '';
-    $singleattachname = '';
+    $attachments = [];
 
     foreach ($reports as $report) {
         $generated = cr_generate_report_for_email($report);
@@ -505,34 +589,7 @@ function cr_send_reports_email(array $reportids, array $recipients, string $subj
         $htmlbody .= $generated->html;
 
         if (!empty($generated->csvpath)) {
-            // Prefix with the report id so that same-named reports don't collide inside the zip.
-            $zipentryname = $report->id . '_' . $generated->csvfilename;
-            $csvfiles[$zipentryname] = [
-                'name' => $generated->csvfilename,
-                'path' => $generated->csvpath,
-            ];
-        }
-    }
-
-    $tmpdir = make_temp_directory('block_configurable_reports');
-
-    if (count($csvfiles) === 1) {
-        $only = reset($csvfiles);
-        $singleattachname = $only['name'];
-        $singleattachment = str_replace($CFG->dataroot . '/', '', $only['path']);
-    } else if (count($csvfiles) > 1) {
-        $zipfilename = 'reports_' . date('Ymd_His') . '.zip';
-        $zipfullpath = $tmpdir . '/' . md5(implode(',', $reportids) . microtime()) . '_' . $zipfilename;
-
-        $filestoarchive = [];
-        foreach ($csvfiles as $zipentryname => $file) {
-            $filestoarchive[$zipentryname] = $file['path'];
-        }
-
-        $zipper = new zip_packer();
-        if ($zipper->archive_to_pathname($filestoarchive, $zipfullpath)) {
-            $singleattachname = $zipfilename;
-            $singleattachment = str_replace($CFG->dataroot . '/', '', $zipfullpath);
+            $attachments[] = ['path' => $generated->csvpath, 'name' => $generated->csvfilename];
         }
     }
 
@@ -542,21 +599,88 @@ function cr_send_reports_email(array $reportids, array $recipients, string $subj
     $sentcount = 0;
     foreach ($recipients as $email) {
         $touser = cr_make_email_recipient($email);
-        if (email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $singleattachment, $singleattachname)) {
+        if (cr_send_email_with_attachments($touser, $fromuser, $subject, $textbody, $htmlbody, $attachments)) {
             $sentcount++;
         }
     }
 
-    foreach ($csvfiles as $file) {
-        if (file_exists($file['path'])) {
-            unlink($file['path']);
+    foreach ($attachments as $attachment) {
+        if (file_exists($attachment['path'])) {
+            unlink($attachment['path']);
         }
-    }
-    if (!empty($zipfullpath) && file_exists($zipfullpath)) {
-        unlink($zipfullpath);
     }
 
     return $sentcount;
+}
+
+/**
+ * Send a single email that may carry zero, one or several file attachments, none of them
+ * zipped together. email_to_user() only supports a single attachment, so for more than one
+ * file this talks to the mailer directly (the same approach email_to_user() itself uses
+ * under the hood).
+ *
+ * @param stdClass $touser Recipient, as built by cr_make_email_recipient().
+ * @param stdClass $fromuser Sender.
+ * @param string $subject
+ * @param string $textbody Plain text body.
+ * @param string $htmlbody HTML body.
+ * @param array $attachments List of ['path' => full filesystem path, 'name' => filename to show].
+ * @return bool
+ */
+function cr_send_email_with_attachments(
+    stdClass $touser,
+    stdClass $fromuser,
+    string $subject,
+    string $textbody,
+    string $htmlbody,
+    array $attachments = []
+): bool {
+    global $CFG;
+
+    if (count($attachments) <= 1) {
+        $attachment = '';
+        $attachname = '';
+        if (!empty($attachments)) {
+            $attachment = str_replace($CFG->dataroot . '/', '', $attachments[0]['path']);
+            $attachname = $attachments[0]['name'];
+        }
+
+        return (bool) email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $attachment, $attachname);
+    }
+
+    if (!validate_email($touser->email)) {
+        return false;
+    }
+
+    $mail = get_mailer();
+
+    $mail->Subject = substr($subject, 0, 900);
+    $mail->FromName = fullname($fromuser);
+    $mail->From = $fromuser->email;
+    $mail->Sender = $fromuser->email;
+    $mail->addAddress($touser->email, fullname($touser));
+
+    if ($htmlbody) {
+        $mail->isHTML(true);
+        $mail->Encoding = 'base64';
+        $mail->Body = $htmlbody;
+        $mail->AltBody = "\n$textbody\n";
+    } else {
+        $mail->isHTML(false);
+        $mail->Body = "\n$textbody\n";
+    }
+
+    foreach ($attachments as $attachment) {
+        $mimetype = mimeinfo('type', $attachment['name']);
+        $mail->addAttachment($attachment['path'], $attachment['name'], 'base64', $mimetype);
+    }
+
+    try {
+        return (bool) $mail->send();
+    } catch (\Throwable $e) {
+        debugging('Error sending configurable report email: ' . $e->getMessage(), DEBUG_NORMAL);
+        return false;
+    }
 }
 
 /**
