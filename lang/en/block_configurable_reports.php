@@ -90,6 +90,22 @@ $string['remotedescription'] = 'Do you want to run this query on the remote db';
 $string['remote_help'] = 'Do you want to run this query on the remote db';
 $string['setcourseid'] = 'Set courseid';
 
+// Scheduled report emails.
+$string['emailoptions'] = 'Email options';
+$string['emailschedule'] = 'Automatically email this report';
+$string['emailschedule_help'] = 'Automatically generate this report and email it to the recipients below, on the chosen frequency.';
+$string['emailschedule_disabled'] = 'Do not send';
+$string['emailschedule_daily'] = 'Daily';
+$string['emailschedule_weekly'] = 'Weekly';
+$string['emailschedule_monthly'] = 'Monthly';
+$string['emailto'] = 'Recipient email addresses';
+$string['emailto_help'] = 'Enter one email address per line (or separate them with commas/semicolons). Each recipient will receive this report by email according to the selected frequency.';
+$string['emailtorequired'] = 'Please enter at least one recipient email address, or set the frequency to "Do not send".';
+$string['invalidemail'] = 'Invalid email address: {$a}';
+$string['sendscheduledreports'] = 'Send scheduled configurable reports by email';
+$string['reportemailsubject'] = 'Report: {$a}';
+$string['reportemailintro'] = 'Please find below the automatically generated report "{$a}".';
+
 // Columns.
 $string['column'] = "Column";
 $string['nocolumnsyet'] = "No columns yet";

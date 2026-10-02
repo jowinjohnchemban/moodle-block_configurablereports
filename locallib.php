@@ -286,6 +286,260 @@ function cr_get_export_plugins(): array {
 }
 
 /**
+ * Available automatic email schedule options for a report.
+ *
+ * @return array
+ */
+function cr_get_email_schedule_options(): array {
+    return [
+        0 => get_string('emailschedule_disabled', 'block_configurable_reports'),
+        1 => get_string('emailschedule_daily', 'block_configurable_reports'),
+        2 => get_string('emailschedule_weekly', 'block_configurable_reports'),
+        3 => get_string('emailschedule_monthly', 'block_configurable_reports'),
+    ];
+}
+
+/**
+ * Split a free-text list of recipient addresses (newline/comma/semicolon separated) into
+ * a clean array of unique, valid email addresses.
+ *
+ * @param string $emailto
+ * @return array List of valid email addresses.
+ */
+function cr_parse_email_recipients(string $emailto): array {
+    $parts = preg_split('/[\r\n,;]+/', $emailto);
+    $emails = [];
+
+    foreach ($parts as $part) {
+        $email = trim($part);
+        if ($email !== '' && validate_email($email)) {
+            $emails[strtolower($email)] = $email;
+        }
+    }
+
+    return array_values($emails);
+}
+
+/**
+ * Validate a free-text list of recipient addresses, returning any invalid entries found.
+ *
+ * @param string $emailto
+ * @return array List of invalid entries (empty when everything is valid).
+ */
+function cr_get_invalid_email_recipients(string $emailto): array {
+    $invalid = [];
+
+    foreach (preg_split('/[\r\n,;]+/', $emailto) as $part) {
+        $email = trim($part);
+        if ($email !== '' && !validate_email($email)) {
+            $invalid[] = $email;
+        }
+    }
+
+    return $invalid;
+}
+
+/**
+ * Check whether a report's scheduled email is due to be sent, based on its
+ * emailschedule frequency and the last time it was emailed.
+ *
+ * @param stdClass $report
+ * @return bool
+ */
+function cr_report_email_is_due(stdClass $report): bool {
+    if (empty($report->emailschedule)) {
+        return false;
+    }
+
+    if (empty($report->lastemailtime)) {
+        return true;
+    }
+
+    $now = time();
+
+    switch ((int) $report->emailschedule) {
+        case 1: // Daily.
+            $nextdue = $report->lastemailtime + DAYSECS;
+            break;
+        case 2: // Weekly.
+            $nextdue = $report->lastemailtime + WEEKSECS;
+            break;
+        case 3: // Monthly.
+            $nextdue = strtotime('+1 month', $report->lastemailtime);
+            break;
+        default:
+            return false;
+    }
+
+    return $now >= $nextdue;
+}
+
+/**
+ * Generate a report and email it to its predefined recipients, as CSV attachment
+ * plus an HTML preview of the data in the message body.
+ *
+ * @param stdClass $report A record from block_configurable_reports.
+ * @return bool True if the report was generated and emailed to at least one recipient.
+ */
+function cr_send_scheduled_report_email(stdClass $report): bool {
+    global $CFG, $DB, $COURSE;
+
+    $recipients = cr_parse_email_recipients((string) $report->emailto);
+    if (empty($recipients)) {
+        return false;
+    }
+
+    if (!$course = $DB->get_record('course', ['id' => $report->courseid])) {
+        return false;
+    }
+    $COURSE = $course;
+
+    require_once($CFG->dirroot . '/blocks/configurable_reports/report.class.php');
+    require_once($CFG->dirroot . '/blocks/configurable_reports/reports/' . $report->type . '/report.class.php');
+
+    $reportclassname = 'report_' . $report->type;
+    $reportclass = new $reportclassname($report);
+    $reportclass->create_report();
+
+    $reportname = format_string($report->name);
+    $table = $reportclass->finalreport->table ?? null;
+
+    $htmlbody = html_writer::tag('p', get_string('reportemailintro', 'block_configurable_reports', $reportname));
+    if (!empty($table) && !empty($table->data)) {
+        $htmlbody .= cr_table_to_html($table);
+    } else {
+        $htmlbody .= html_writer::tag('p', get_string('norecordsfound', 'block_configurable_reports'));
+    }
+    $textbody = html_to_text($htmlbody);
+
+    $attachment = '';
+    $attachname = '';
+    if (!empty($table) && !empty($table->data)) {
+        $csvcontent = cr_table_to_csv($table);
+        $tmpdir = make_temp_directory('block_configurable_reports');
+        $attachname = clean_filename($reportname) . '.csv';
+        $fullpath = $tmpdir . '/' . md5($report->id . '_' . time()) . '_' . $attachname;
+        file_put_contents($fullpath, $csvcontent);
+        $attachment = str_replace($CFG->dataroot . '/', '', $fullpath);
+    }
+
+    $subject = get_string('reportemailsubject', 'block_configurable_reports', $reportname);
+    $fromuser = core_user::get_noreply_user();
+
+    $sentany = false;
+    foreach ($recipients as $email) {
+        $touser = cr_make_email_recipient($email);
+        if (email_to_user($touser, $fromuser, $subject, $textbody, $htmlbody, $attachment, $attachname)) {
+            $sentany = true;
+        }
+    }
+
+    if (!empty($attachment) && !empty($fullpath) && file_exists($fullpath)) {
+        unlink($fullpath);
+    }
+
+    if ($sentany) {
+        $DB->set_field('block_configurable_reports', 'lastemailtime', time(), ['id' => $report->id]);
+    }
+
+    return $sentany;
+}
+
+/**
+ * Build a throwaway user object suitable for email_to_user(), for a recipient that may not
+ * have a Moodle account.
+ *
+ * @param string $email
+ * @return stdClass
+ */
+function cr_make_email_recipient(string $email): stdClass {
+    global $DB;
+
+    if ($existing = $DB->get_record('user', ['email' => $email, 'deleted' => 0, 'suspended' => 0], '*', IGNORE_MULTIPLE)) {
+        return $existing;
+    }
+
+    $user = new stdClass();
+    $user->id = -1;
+    $user->email = $email;
+    $user->firstname = $email;
+    $user->lastname = '';
+    $user->firstnamephonetic = '';
+    $user->lastnamephonetic = '';
+    $user->middlename = '';
+    $user->alternatename = '';
+    $user->maildisplay = true;
+    $user->mailformat = 1;
+    $user->auth = 'manual';
+    $user->suspended = 0;
+    $user->deleted = 0;
+    $user->emailstop = 0;
+    $user->lang = current_language();
+
+    return $user;
+}
+
+/**
+ * Flatten a configurable reports table object into a CSV string.
+ *
+ * @param object $table Object with ->head and ->data, as produced by report_base::create_report().
+ * @return string
+ */
+function cr_table_to_csv(object $table): string {
+    $csvdelimiter = get_config('block_configurable_reports', 'csvdelimiter') ?: 'comma';
+    $delimiters = ['comma' => ',', 'semicolon' => ';', 'colon' => ':', 'tab' => "\t", 'cfg' => ','];
+    $delimiter = $delimiters[$csvdelimiter] ?? ',';
+
+    $lines = [];
+
+    if (!empty($table->head)) {
+        $lines[] = cr_csv_row($table->head, $delimiter);
+    }
+
+    if (!empty($table->data)) {
+        foreach ($table->data as $row) {
+            $lines[] = cr_csv_row($row, $delimiter);
+        }
+    }
+
+    return implode("\r\n", $lines);
+}
+
+/**
+ * Build a single CSV row from a report row, stripping tags/formatting.
+ *
+ * @param array $row
+ * @param string $delimiter
+ * @return string
+ */
+function cr_csv_row(array $row, string $delimiter): string {
+    $cells = [];
+
+    foreach ($row as $item) {
+        $value = str_replace("\n", ' ', htmlspecialchars_decode(strip_tags(nl2br(format_string((string) $item)))));
+        $cells[] = '"' . str_replace('"', '""', $value) . '"';
+    }
+
+    return implode($delimiter, $cells);
+}
+
+/**
+ * Render a configurable reports table object (head/data) as a plain, self-contained HTML
+ * table suitable for embedding in an email body (no forms or JS, unlike cr_print_table()).
+ *
+ * @param object $table Object with ->head and ->data, as produced by report_base::create_report().
+ * @return string
+ */
+function cr_table_to_html(object $table): string {
+    $htmltable = new html_table();
+    $htmltable->head = $table->head ?? [];
+    $htmltable->data = $table->data ?? [];
+    $htmltable->attributes['class'] = 'generaltable';
+
+    return html_writer::table($htmltable);
+}
+
+/**
  * cr_print_table
  *
  * @param object $table
